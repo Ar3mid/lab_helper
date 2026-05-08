@@ -1,4 +1,4 @@
-from PySide6.QtGui import QRegularExpressionValidator
+from PySide6.QtGui import QRegularExpressionValidator, QColor
 from PySide6.QtCore import Qt, QRegularExpression
 from PySide6.QtWidgets import (
     QStyledItemDelegate,
@@ -202,7 +202,7 @@ class LSM(BaseApprox):
         #max для исключения ошибки, когда значение должно быть равно 0,
         #но вывод -0.0...01
 
-    def gen_table_data(self):
+    def out_table_data(self):
         """вывод данных"""
         x_mean = np.mean(self._x)
         y_mean = np.mean(self._y)
@@ -238,55 +238,107 @@ class LSM(BaseApprox):
             #словари для ui
         }
 
-class TestWindow(QMainWindow):
-    """тест"""
+class ResultTable(QTableWidget):
+    """таблица результатов (для чтения)"""
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        # запрет на редактирование
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+    def display_results(self, data_dict: dict):
+        """
+        принимает словарь из out_table_data и сторит таблицу
+        """
+        col_data = data_dict["columns"]
+        col_names = list(col_data.keys())
+        # названия стлбцов
+        n_points = len(col_data[col_names[0]])
+        
+        self.setRowCount(n_points + 2)
+        self.setColumnCount(len(col_names))
+        self.setHorizontalHeaderLabels(col_names)
+        # настройка сетки таблицы
+        
+        for row in range(n_points):
+            for col_idx, col_name in enumerate(col_names):
+                val = col_data[col_name][row]
+                item = QTableWidgetItem(f"{val:.4f}")
+                item.setTextAlignment(Qt.AlignCenter)
+                self.setItem(row, col_idx, item)
+    
+        sum_row = n_points
+        for col_idx, col_name in enumerate(col_names):
+            val = data_dict["sums"][col_name]
+            item = QTableWidgetItem(f"∑={val:.4f}")
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setBackground(QColor(240, 240, 240)) 
+            self.setItem(sum_row, col_idx, item)
+            
+        mean_row = n_points + 1
+        for col_idx, col_name in enumerate(col_names):
+            if col_name in data_dict["means"]:
+                val = data_dict["means"][col_name]
+                item = QTableWidgetItem(f"<{col_name}>={val:.4f}")
+            else:
+                item = QTableWidgetItem("-") # при остуствии средних
+                
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setBackground(QColor(255, 255, 200))
+            self.setItem(mean_row, col_idx, item)
+
+class TestWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("lab_helper")
-        self.resize(500, 400)
+        self.resize(800, 600)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        
         self.table = InputTable()
-        self.table.set_columns(["X", "Y"])
-        layout.addWidget(self.table)
+        self.table.set_columns(["x", "y"])
+        main_layout.addWidget(self.table)
+        
         btn_layout = QHBoxLayout()
         self.btn_add = QPushButton("добавить строку")
         self.btn_add.clicked.connect(self.table.add_data_row)
+        
         self.btn_remove = QPushButton("удалить строку")
         self.btn_remove.clicked.connect(self.table.remove_data_row)
-        self.btn_calc = QPushButton("расчет МНК")
+        
+        self.btn_calc = QPushButton("рассчитать МНК")
         self.btn_calc.clicked.connect(self.calculate_mnk)
+        
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_remove)
         btn_layout.addWidget(self.btn_calc)
-        layout.addLayout(btn_layout)
+        main_layout.addLayout(btn_layout)
+
+        self.result_table = ResultTable()
+        main_layout.addWidget(self.result_table)
+
         self.table.add_data_row()
         self.table.add_data_row()
         self.table.add_data_row()
+
     def calculate_mnk(self):
-        print("\n" + "=" * 30)
         try:
-            # x - 1 y - 2
             x_data = self.table.get_column_data(1)
             y_data = self.table.get_column_data(2)
-            print(f"x: {x_data}")
-            print(f"y: {y_data}")
+            
             lsm_solver = LSM(x_data, y_data)
             a, b, sigma_a, sigma_b = lsm_solver.calculate()
-            print("-" * 30)
-            sign = "+" if b >= 0 else "-"
-            print(f"уравнение y = {a:.4f}x {sign} {abs(b):.4f}")
-            print(f"погрешность a (σa) = {sigma_a:.4f}")
-            print(f"погрешность b (σb) = {sigma_b:.4f}")
-            table_dict = lsm_solver.gen_table_data()
-            print(f"сумма x*y: {table_dict['sums']['x*y']:.4f}")
+            table_dict = lsm_solver.out_table_data()
+            
+            self.result_table.display_results(table_dict)
+
         except DataError as e:
             print(f"ошибка данных: {e}")
         except ValueError as e:
-            print(f"ошибак ввода: {e}")
+            print(f"ошибка ввода: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
