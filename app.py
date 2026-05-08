@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QLineEdit,
     QHBoxLayout,
-    QPushButton
+    QPushButton,
+    QMessageBox,
 )
 import sys
 import numpy as np
@@ -23,21 +24,24 @@ class NumDelegate(QStyledItemDelegate):
     менеджер для ячеек таблицы, центрирует пользовательский ввод и не дает вводить что то, кроме цифр,
     точки, запятой, знака минуса
     """
+
     def createEditor(self, parent, option, index):
         editor = QLineEdit(parent)
-        editor.setAlignment(Qt.AlignCenter) 
+        editor.setAlignment(Qt.AlignCenter)
         # центровка во время ввода
         regex = QRegularExpression(r"^-?\d+([.,]\d+)?$")
         # разрешение регулярным выражением
         validator = QRegularExpressionValidator(regex)
         editor.setValidator(validator)
         return editor
+
     def initStyleOption(self, option, index):
         """настройка внешнего вида ячейки"""
         super().initStyleOption(option, index)
         option.displayAlignment = Qt.AlignCenter
         # центровка введенного текста
-    
+
+
 class InputTable(QTableWidget):
     """
     кастомная таблица для ввода данных
@@ -59,6 +63,15 @@ class InputTable(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         # растяжение таблицы на все возможное пространство
         self.setItemDelegate(NumDelegate(self))
+    
+    def _create_number_item(self, number_str: str):
+        """
+        вспомогательный метод для избегания повторов
+        """
+        item = QTableWidgetItem(number_str)
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+        return item
 
     def set_columns(self, column_names: list[str]):
         """
@@ -78,10 +91,6 @@ class InputTable(QTableWidget):
         self.insertRow(row_index)
         num_item = QTableWidgetItem(str(row_index + 1))
         # создание ячейки с номером измерения
-        num_item.setTextAlignment(Qt.AlignCenter)
-        # центрирование значения
-        num_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-        # защита от дурака, чтобы пользователь не ломал нумерацию
         self.setItem(row_index, 0, num_item)
         # установка ячейки в 1 столбец
 
@@ -118,8 +127,6 @@ class InputTable(QTableWidget):
         """
         for row in range(self.rowCount()):
             num_item = QTableWidgetItem(str(row + 1))
-            num_item.setTextAlignment(Qt.AlignCenter)
-            num_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.setItem(row, 0, num_item)
 
     def get_column_data(self, col_index):
@@ -133,52 +140,156 @@ class InputTable(QTableWidget):
                 val_str = item.text().replace(",", ".")
                 data.append(float(val_str))
         return data
-    
 
-class test(QMainWindow):
-    """тест вышенаписанного"""
+class DataError(Exception):
+    """недостаточно данных"""
+    # кастомная ошибка для недостаточного количества данных
+    pass
+
+class BaseApprox(ABC):
+    """Абстрактный класс для методов аппроксимации"""
+    def __init__(self, x, y):
+        if len(x) != len(y):
+            raise ValueError("разное количество x и y")
+        if len(x) < 3:
+            raise DataError("необходимо минимум 3 точки")
+        self._x = np.array(x, dtype=float)
+        self._y = np.array(y, dtype=float)
+        self._n = len(x)
+        #преобразование массивов в numpy, проверка количсетва данных
+
+    @abstractmethod #для каждого наследника свой расчет
+    def calculate(self):
+        """метод для переопределения"""
+        pass
+
+    def __len__(self):
+        """для применения len к объекту"""
+        return self._n
+
+class LSM(BaseApprox):
+    """метод наименьших квадратов"""
+    def __init__(self, x: list[float], y: list[float]):
+        super().__init__(x, y)
+        self.a = 0.0
+        self.b = 0.0
+        self.sigma_a = 0.0
+        self.sigma_b = 0.0
+        #резервация места под коэффициенты прямой и их погрешности
+    def calculate(self):
+        """расчет коэффициентов a и b и их погрешностей"""
+        x_mean = np.mean(self._x)
+        y_mean = np.mean(self._y)
+        #среднее значение
+        x2_mean = np.mean(self._x**2)
+        y2_mean = np.mean(self._y**2)
+        xy_mean = np.mean(self._x * self._y)
+        #среднее квадратов и произведения
+        sigma2_x = x2_mean - x_mean**2
+        sigma2_y = y2_mean - y_mean**2
+        #дисперсия
+        if sigma2_x == 0:
+            raise ValueError("все x одинаковы, невозможно построить прямую")
+        #исключение для деления на 0
+        self.a = (xy_mean - x_mean * y_mean) / sigma2_x
+        self.b = y_mean - self.a * x_mean
+        #расчет коэффициентов
+        val = max(0, (sigma2_y / sigma2_x) - self.a**2)
+        self.sigma_a = np.sqrt((1 / (self._n - 2)) * val)
+        self.sigma_b = self.sigma_a * np.sqrt(x2_mean)
+        return self.a, self.b, self.sigma_a, self.sigma_b
+        #расчет погрешностей
+        #max для исключения ошибки, когда значение должно быть равно 0,
+        #но вывод -0.0...01
+
+    def gen_table_data(self):
+        """вывод данных"""
+        x_mean = np.mean(self._x)
+        y_mean = np.mean(self._y)
+        #вычисление столбцов
+        dx = self._x - x_mean            # (x_i - <x>)
+        dy = self._y - y_mean            # (y_i - <y>)
+        dx_sq = dx**2                    # (x_i - <x>)^2
+        dy_sq = dy**2                    # (y_i - <y>)^2
+        xy = self._x * self._y           # x_i * y_i
+        return {
+            "columns": {
+                "x": self._x,
+                "y": self._y,
+                "x - <x>": dx,
+                "y - <y>": dy,
+                "(x - <x>)^2": dx_sq,
+                "(y - <y>)^2": dy_sq,
+                "x*y": xy
+            },
+            "sums": {
+                "x": np.sum(self._x),
+                "y": np.sum(self._y),
+                "x - <x>": np.sum(dx),
+                "y - <y>": np.sum(dy),
+                "(x - <x>)^2": np.sum(dx_sq),
+                "(y - <y>)^2": np.sum(dy_sq),
+                "x*y": np.sum(xy)
+            },
+            "means": {
+                "x": x_mean,
+                "y": y_mean
+            }
+            #словари для ui
+        }
+
+class TestWindow(QMainWindow):
+    """тест"""
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("тест таблицы")
+        self.setWindowTitle("lab_helper")
         self.resize(500, 400)
+        
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         self.table = InputTable()
-        self.table.set_columns(["x", "y"])
+        self.table.set_columns(["X", "Y"])
         layout.addWidget(self.table)
         btn_layout = QHBoxLayout()
-        self.btn_add = QPushButton("добавление строки")
+        self.btn_add = QPushButton("добавить строку")
         self.btn_add.clicked.connect(self.table.add_data_row)
-        self.btn_print = QPushButton("вывод данных")
-        self.btn_print.clicked.connect(self.print_data)
-        btn_layout.addWidget(self.btn_add)
-        btn_layout.addWidget(self.btn_print)
-        layout.addLayout(btn_layout)
-        self.table.add_data_row()
-        self.table.add_data_row()
-        btn_layout = QHBoxLayout()
-        self.btn_remove = QPushButton("удаление строки")
+        self.btn_remove = QPushButton("удалить строку")
         self.btn_remove.clicked.connect(self.table.remove_data_row)
+        self.btn_calc = QPushButton("расчет МНК")
+        self.btn_calc.clicked.connect(self.calculate_mnk)
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_remove)
-        btn_layout.addWidget(self.btn_print)
-        
+        btn_layout.addWidget(self.btn_calc)
         layout.addLayout(btn_layout)
-    def print_data(self):
-        """вывод данных"""
-        print("-" * 20)
+        self.table.add_data_row()
+        self.table.add_data_row()
+        self.table.add_data_row()
+    def calculate_mnk(self):
+        print("\n" + "=" * 30)
         try:
-            # 1 = x, 2 = y
+            # x - 1 y - 2
             x_data = self.table.get_column_data(1)
             y_data = self.table.get_column_data(2)
-            print("Массив x:", x_data)
-            print("Массив y:", y_data)
+            print(f"x: {x_data}")
+            print(f"y: {y_data}")
+            lsm_solver = LSM(x_data, y_data)
+            a, b, sigma_a, sigma_b = lsm_solver.calculate()
+            print("-" * 30)
+            sign = "+" if b >= 0 else "-"
+            print(f"уравнение y = {a:.4f}x {sign} {abs(b):.4f}")
+            print(f"погрешность a (σa) = {sigma_a:.4f}")
+            print(f"погрешность b (σb) = {sigma_b:.4f}")
+            table_dict = lsm_solver.gen_table_data()
+            print(f"сумма x*y: {table_dict['sums']['x*y']:.4f}")
+        except DataError as e:
+            print(f"ошибка данных: {e}")
         except ValueError as e:
-            print("Ошибка конвертации:", e)
+            print(f"ошибак ввода: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window =  test()
+    window = TestWindow()
     window.show()
     sys.exit(app.exec())
