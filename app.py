@@ -425,7 +425,7 @@ class PlotWindow(QWidget):
             self, 
             "Сохранить график", 
             default_path, 
-            "PNG Картинки (*.png);;JPEG Картинки (*.jpg);;Все файлы (*)"
+            "PNG Картинки (*.png);;)"
         )
         
         if file_path:
@@ -454,7 +454,7 @@ class MainWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         self.btn_add = QPushButton("добавить строку")
         self.btn_add.clicked.connect(self.table.add_data_row)
-        self.btn_remove = QPushButton("ндалить строку")
+        self.btn_remove = QPushButton("удалить строку")
         self.btn_remove.clicked.connect(self.table.remove_data_row)
         self.btn_calc = QPushButton("таблица МНК")
         self.btn_calc.clicked.connect(self.calculate_mnk)
